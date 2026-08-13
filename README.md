@@ -20,7 +20,7 @@ python -m pip install -e ".[llm]"
 
 ## 输出格式
 
-推理结果使用 JSONL 格式，详细说明见 [docs/OUTPUT_FORMAT.md](docs/OUTPUT_FORMAT.md)。公开网元 ID 采用 `<city>-<original-role>`，例如 `xian-service-vm-1`、`nanjing-cr-2`。
+推理结果使用 JSONL 格式，示例见 `examples/predictions.jsonl`。公开网元 ID 采用 `<city>-<original-role>`，例如 `xian-service-vm-1`、`nanjing-cr-2`。
 
 ## 运行 Baseline
 
@@ -52,23 +52,21 @@ python tools/run_sample_baseline.py \
 
 ## 本地评测
 
-Baseline 仅生成预测文件，评测需单独运行：
+仓库提供本地评测工具，可用于验证预测结果：
 
 ```bash
 python -m aiops_challenge_2026.evaluator \
   --ground-truth sample/ground_truth.jsonl \
-  --predictions outputs/bian_predictions.jsonl \
-  --report outputs/bian_report.json
+  --predictions outputs/predictions.jsonl
 ```
 
-`examples/predictions.jsonl` 用于演示输出格式和评测工具使用方式，不代表 Baseline 性能。评分规则见 [docs/EVALUATION.md](docs/EVALUATION.md)。
+`examples/predictions.jsonl` 可用于演示评测工具的使用方式，不代表 Baseline 性能。
 
 ## 目录结构
 
 ```text
 aiops_challenge_2026/  官方配置、数据接口与 Evaluator
 baseline/bian/         BiAn Baseline
-docs/                  评分规则与输出格式
 examples/              Prediction JSONL 示例
 sample/                公开样例数据与对应 Ground Truth
 tools/                 样例构建与 Baseline 运行工具
