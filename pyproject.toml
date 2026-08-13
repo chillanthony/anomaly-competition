@@ -12,7 +12,6 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
 llm = ["torch>=2.1", "transformers>=4.40"]
 
 [tool.setuptools.packages.find]
@@ -20,6 +19,3 @@ include = ["aiops_challenge_2026*"]
 
 [tool.setuptools.package-data]
 "aiops_challenge_2026.config" = ["*.json"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]

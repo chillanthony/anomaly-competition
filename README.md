@@ -5,7 +5,7 @@
 ## 安装
 
 ```bash
-python -m pip install -e ".[dev]"
+python -m pip install -e .
 ```
 
 运行 7B 模型时另安装：
@@ -18,9 +18,9 @@ python -m pip install -e ".[llm]"
 
 `sample/` 包含 3 个可直接运行的样例 case，每个 case 覆盖 8 个城市区域及公开 processed 数据源。任务 taxonomy 和网元定义位于 `aiops_challenge_2026/config/`。
 
-## 输出格式
+## 示例
 
-推理结果使用 JSONL 格式，示例见 `examples/predictions.jsonl`。公开网元 ID 采用 `<city>-<original-role>`，例如 `xian-service-vm-1`、`nanjing-cr-2`。
+预测结果示例见 `examples/predictions.jsonl`。
 
 ## 运行 Baseline
 
@@ -69,7 +69,7 @@ aiops_challenge_2026/  官方配置、数据接口与 Evaluator
 baseline/bian/         BiAn Baseline
 examples/              Prediction JSONL 示例
 sample/                公开样例数据与对应 Ground Truth
-tools/                 样例构建与 Baseline 运行工具
+tools/                 Baseline 运行工具
 ```
 
 ## 参考文献
