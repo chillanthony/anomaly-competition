@@ -56,7 +56,7 @@ class JsonModelBackend:
         self._tokenizer = AutoTokenizer.from_pretrained(self.model, local_files_only=local, trust_remote_code=False)
         kwargs = {"trust_remote_code": False, "local_files_only": local, "low_cpu_mem_usage": True}
         if torch.cuda.is_available():
-            kwargs.update({"dtype": torch.bfloat16, "device_map": {"": 0}})
+            kwargs.update({"torch_dtype": torch.bfloat16, "device_map": {"": 0}})
         self._network = AutoModelForCausalLM.from_pretrained(self.model, **kwargs)
         self._network.eval()
 
