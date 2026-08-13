@@ -37,9 +37,9 @@ python tools/run_sample_baseline.py \
 
 ### BiAn Baseline
 
-本仓库提供基于 BiAn 方法适配实现的参考 Baseline。BiAn 方法来源于论文 [Towards LLM-Based Failure Localization in Production-Scale Networks](https://doi.org/10.1145/3718958.3750505)。
+本仓库提供基于 BiAn 方法实现的参考 Baseline。BiAn 方法来源于论文 [Towards LLM-Based Failure Localization in Production-Scale Networks](https://doi.org/10.1145/3718958.3750505)。
 
-原始 BiAn 面向大规模生产网络故障定位。本仓库结合 AIOps Challenge 2026 的数据格式、任务定义和输出规范进行了适配，并采用轻量化的 7B 模型作为参考实现，用于展示赛题数据读取与组织、根因网元候选分析与排序、故障类别判断、结构化预测输出和本地评测的完整流程。该 Baseline 仅供参考，不代表最佳模型性能。
+本实现结合 AIOps Challenge 2026 的数据格式、任务定义和输出规范进行了相应适配。为便于参赛者理解赛题数据的使用方式，并展示从多源数据读取、分析，到根因定位、故障分类、结构化结果输出及本地评分的完整流程，公开参考实现对原始方法进行了适当简化，并采用轻量级 7B 模型以降低运行资源要求。该 Baseline 主要用于展示完整的数据处理与评测流程，供参赛者参考，不代表 BiAn 方法的完整实现或最佳性能，也并非针对本赛题进行性能优化。
 
 ```bash
 python tools/run_sample_baseline.py \
