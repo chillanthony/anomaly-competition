@@ -33,11 +33,13 @@ python tools/run_sample_baseline.py \
   --output outputs/quick_validation_predictions.jsonl
 ```
 
-该模式用于检查数据读取、异常检测和预测输出流程，不代表正式 BiAn Baseline。
+该模式用于检查数据读取、结构化输出及本地评分流程是否能够正常运行，不代表 BiAn Baseline 的实际推理效果。
 
 ### BiAn Baseline
 
-本仓库提供基于 BiAn 多阶段推理流程实现的参考 Baseline，并结合本赛题端到端输入形式增加简单的 5σ 异常检测模块。
+本仓库提供基于 BiAn 方法适配实现的参考 Baseline。BiAn 方法来源于论文 [Towards LLM-Based Failure Localization in Production-Scale Networks](https://doi.org/10.1145/3718958.3750505)。
+
+原始 BiAn 面向大规模生产网络故障定位。本仓库结合 AIOps Challenge 2026 的数据格式、任务定义和输出规范进行了适配，并采用轻量化的 7B 模型作为参考实现，用于展示赛题数据读取与组织、根因网元候选分析与排序、故障类别判断、结构化预测输出和本地评测的完整流程。该 Baseline 仅供参考，不代表最佳模型性能。
 
 ```bash
 python tools/run_sample_baseline.py \
@@ -46,7 +48,7 @@ python tools/run_sample_baseline.py \
   --output outputs/bian_predictions.jsonl
 ```
 
-流程包括：5σ anomaly detection → candidate evidence construction → device-level analysis → multi-stage reasoning → Rank-of-Ranks → fault classification → prediction JSONL。两个模型角色可共用同一个 `DeepSeek-R1-Distill-Qwen-7B` 权重。
+模型参数可使用本地权重目录或兼容的模型 ID；参考配置使用 `DeepSeek-R1-Distill-Qwen-7B`。
 
 ## 本地评测
 
@@ -71,3 +73,9 @@ examples/              Prediction JSONL 示例
 sample/                公开样例数据与对应 Ground Truth
 tools/                 样例构建与 Baseline 运行工具
 ```
+
+## 参考文献
+
+Wang C, Zhang X, Lu R, et al. Towards LLM-Based Failure Localization in Production-Scale Networks[C]//Proceedings of the ACM SIGCOMM 2025 Conference. 2025: 496-511.
+
+论文链接：https://doi.org/10.1145/3718958.3750505
