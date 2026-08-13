@@ -1,0 +1,106 @@
+"""Small local Transformers backend shared by the two logical BiAn roles."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from pathlib import Path
+import time
+from typing import Any, Callable
+
+from .structured_output import parse_and_validate
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    max_input_tokens: int = 8192
+    batch_size: int = 8
+    device_max_new_tokens: int = 256
+    stage1_max_new_tokens: int = 256
+    stage2_max_new_tokens: int = 384
+    classification_max_new_tokens: int = 192
+    retries: int = 1
+    seed: int = 42
+
+
+EXPECTED_KEYS = {
+    "7b_a_device_analysis": "device_analyses",
+    "7b_b_stage1": "scores",
+    "7b_b_stage2": "candidates",
+    "classification": None,
+}
+
+RESPONSE_PREFIXES = {
+    "7b_b_stage2": '{"candidates":[',
+}
+
+
+def response_prefix_for(prompt_name: str) -> str:
+    """Schema-only assistant prefill; contains no candidate or label values."""
+    return RESPONSE_PREFIXES.get(prompt_name, "")
+
+
+class JsonModelBackend:
+    def __init__(self, model: str, config: ModelConfig, prompt_dir: Path):
+        self.model = model
+        self.config = config
+        self.prompt_dir = prompt_dir
+        self._tokenizer = None
+        self._network = None
+        self.calls: list[dict[str, Any]] = []
+
+    def load(self) -> None:
+        if self._network is not None:
+            return
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
+        local = Path(self.model).exists()
+        self._tokenizer = AutoTokenizer.from_pretrained(self.model, local_files_only=local, trust_remote_code=False)
+        kwargs = {"trust_remote_code": False, "local_files_only": local, "low_cpu_mem_usage": True}
+        if torch.cuda.is_available():
+            kwargs.update({"dtype": torch.bfloat16, "device_map": {"": 0}})
+        self._network = AutoModelForCausalLM.from_pretrained(self.model, **kwargs)
+        self._network.eval()
+
+    def _render_prompt(self, name: str, payload: dict[str, Any]) -> str:
+        template = (self.prompt_dir / f"{name}.txt").read_text(encoding="utf-8")
+        return template + "\n\nINPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+    def generate_json(self, *, role: str, prompt_name: str, prompt_version: str, payload: dict[str, Any], validator: Callable[[Any], dict[str, Any]], max_new_tokens: int) -> dict[str, Any]:
+        self.load()
+        import torch
+        assert self._tokenizer is not None and self._network is not None
+        error = None
+        for attempt in range(1, self.config.retries + 2):
+            prompt = self._render_prompt(prompt_name, payload)
+            rendered = self._tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)
+            rendered += "<think>\n</think>\n"
+            response_prefix = response_prefix_for(prompt_name)
+            rendered += response_prefix
+            inputs = self._tokenizer(rendered, return_tensors="pt", truncation=True, max_length=self.config.max_input_tokens)
+            device = next(self._network.parameters()).device
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+            started = time.perf_counter()
+            with torch.inference_mode():
+                output = self._network.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=self._tokenizer.eos_token_id, use_cache=True)
+            generated = output[0, inputs["input_ids"].shape[-1]:]
+            raw = response_prefix + self._tokenizer.decode(generated, skip_special_tokens=True)
+            record = {"role": role, "prompt_name": prompt_name, "prompt_version": prompt_version, "attempt": attempt, "elapsed_seconds": time.perf_counter() - started, "input_tokens": int(inputs["input_ids"].shape[-1]), "output_tokens": int(generated.numel()), "response_prefix": response_prefix, "raw_output": raw}
+            try:
+                result = parse_and_validate(
+                    raw,
+                    expected_key=EXPECTED_KEYS.get(prompt_name),
+                    validator=validator,
+                )
+                record["status"] = "success"
+                self.calls.append(record)
+                return result
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                record["status"] = "failed"
+                record["error"] = error
+                self.calls.append(record)
+        raise ValueError(f"{role}/{prompt_name} failed after retries: {error}")
+
+    def call_manifest(self) -> list[dict[str, Any]]:
+        return self.calls

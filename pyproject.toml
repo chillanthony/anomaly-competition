@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiops-challenge-2026"
+version = "0.1.0"
+description = "Public SDK, evaluator, sample data and baseline for CCF AIOps Challenge 2026"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+llm = ["torch>=2.1", "transformers>=4.40"]
+
+[tool.setuptools.packages.find]
+include = ["aiops_challenge_2026*"]
+
+[tool.setuptools.package-data]
+"aiops_challenge_2026.config" = ["*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
