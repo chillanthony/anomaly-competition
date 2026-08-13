@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-llm = ["torch>=2.1", "transformers>=4.40"]
+llm = ["torch>=2.1", "transformers>=4.40", "accelerate"]
 
 [tool.setuptools.packages.find]
 include = ["aiops_challenge_2026*"]

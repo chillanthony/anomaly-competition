@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -55,73 +56,54 @@ def main() -> int:
         description="Run Baseline inference for the three public sample cases"
     )
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--use-llm", action="store_true")
     parser.add_argument(
         "--model", default="deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     )
     args = parser.parse_args()
 
-    run_dir = args.run_dir or args.output.parent / f"{args.output.stem}_cases"
-    if args.output.exists() or run_dir.exists():
+    if args.output.exists():
         raise SystemExit("output path already exists")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    run_dir.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix="aiops_baseline_") as temporary:
+        run_dir = Path(temporary)
+        for case_name in CASES:
+            case_output = run_dir / f"{case_name}.jsonl"
+            command = [
+                sys.executable,
+                str(REPO / "baseline" / "bian" / "run.py"),
+                "--data-root",
+                str(REPO / "sample" / case_name),
+                "--output",
+                str(case_output),
+                "--prediction-prefix",
+                f"{case_name}_",
+            ]
+            if args.use_llm:
+                command.extend(["--use-llm", "--model", args.model])
+            try:
+                subprocess.run(command, cwd=REPO, check=True)
+            except subprocess.CalledProcessError as exc:
+                raise SystemExit(
+                    f"{case_name}: Baseline inference failed with exit code "
+                    f"{exc.returncode}"
+                ) from None
+            records = _read_jsonl(case_output)
+            if len(records) != 1:
+                raise RuntimeError(
+                    f"{case_name}: expected one prediction, got {len(records)}"
+                )
 
-    manifest = {
-        "model": args.model if args.use_llm else None,
-        "backend": "transformers" if args.use_llm else "quick_validation",
-        "cases": [],
-    }
-    for case_name in CASES:
-        case_output = run_dir / f"{case_name}.jsonl"
-        command = [
-            sys.executable,
-            str(REPO / "baseline" / "bian" / "run.py"),
-            "--data-root",
-            str(REPO / "sample" / case_name),
-            "--output",
-            str(case_output),
-            "--prediction-prefix",
-            f"{case_name}_",
-        ]
-        if args.use_llm:
-            command.extend(["--use-llm", "--model", args.model])
-        subprocess.run(command, cwd=REPO, check=True)
-        records = _read_jsonl(case_output)
-        if len(records) != 1:
-            raise RuntimeError(
-                f"{case_name}: expected one prediction, got {len(records)}"
-            )
-        model_manifest_path = case_output.with_name(
-            case_output.stem + ".manifest.json"
-        )
-        model_manifest = json.loads(
-            model_manifest_path.read_text(encoding="utf-8")
-        )
-        if args.use_llm and model_manifest.get("mode") != "bian_llm":
-            raise RuntimeError(
-                f"{case_name}: model pipeline did not produce a valid prediction"
-            )
-        manifest["cases"].append(
-            {
-                "case": case_name,
-                "prediction_file": case_output.name,
-                "model_manifest": model_manifest_path.name,
-            }
-        )
-
-    case_paths = [run_dir / f"{case_name}.jsonl" for case_name in CASES]
-    staged_output = run_dir / ".combined.jsonl"
-    staged_output.write_bytes(b"".join(path.read_bytes() for path in case_paths))
-    records = _read_jsonl(staged_output)
-    if len(records) != 3 or len({item["prediction_id"] for item in records}) != 3:
-        raise RuntimeError("combined prediction must contain three unique events")
-    os.replace(staged_output, args.output)
-    (run_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+        case_paths = [run_dir / f"{case_name}.jsonl" for case_name in CASES]
+        combined = b"".join(path.read_bytes() for path in case_paths)
+        staged_output = run_dir / "combined.jsonl"
+        staged_output.write_bytes(combined)
+        records = _read_jsonl(staged_output)
+        if len(records) != 3 or len({item["prediction_id"] for item in records}) != 3:
+            raise RuntimeError("combined prediction must contain three unique events")
+        output_staging = args.output.with_name(f".{args.output.name}.tmp")
+        output_staging.write_bytes(combined)
+        os.replace(output_staging, args.output)
     print(json.dumps({"events": 3, "output": str(args.output)}))
     return 0
 

@@ -12,7 +12,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="CCF AIOps Challenge 2026 official evaluator")
     parser.add_argument("--ground-truth", type=Path, required=True)
     parser.add_argument("--predictions", type=Path, required=True)
-    parser.add_argument("--report", type=Path, default=Path("evaluator_report.json"))
+    parser.add_argument("--report", type=Path, default=Path("outputs/evaluator_report.json"))
     args = parser.parse_args()
     truth = load_jsonl(args.ground_truth, validate_ground_truth)
     predictions = load_predictions_for_evaluation(args.predictions)

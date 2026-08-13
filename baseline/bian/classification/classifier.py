@@ -38,7 +38,6 @@ def classify_with_llm(backend, *, top5: list[dict[str, Any]], context: dict[str,
         result = backend.generate_json(
             role="7B-B",
             prompt_name="classification",
-            prompt_version=f"public-bian-classification-round-{round_index}-v1",
             payload={"round": round_index, "taxonomy": taxonomy, "root_cause_top5": top5, "timeline": observed_timeline, "candidate_evidence": observed_evidence},
             validator=lambda value: validate_classification(value, taxonomy),
             max_new_tokens=max_new_tokens,

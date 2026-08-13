@@ -29,7 +29,7 @@ from classification.classifier import (
     unknown_category,
 )
 from localization.ranking import (
-    fallback_top5,
+    quick_validation_top5,
     rank_stage1,
     stage2_consensus,
     validate_stage1,
@@ -79,8 +79,8 @@ def _device_analysis_validator(value: Any, nodes: list[str]) -> dict[str, Any]:
     return {"device_analyses": [by_node[node] for node in nodes]}
 
 
-def _smoke_stage1(context: dict[str, Any]) -> list[dict[str, Any]]:
-    """Deterministic fallback used only when no model is requested."""
+def _quick_validation_stage1(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Create a shortlist for the no-model workflow check."""
     return rank_stage1(context["candidates"], {}, {"min_candidates": 5, "max_candidates": 12, "top_p": 0.85, "weights": {"model_anomaly_score": 0.0, "deterministic_feature_score": 1.0}})[1]
 
 
@@ -99,7 +99,7 @@ def _llm_event(
     context: dict[str, Any],
     config: dict[str, Any],
     backend: JsonModelBackend,
-) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
     nodes = [item["node_id"] for item in context["candidates"]]
     compact_candidates = context["candidates"]
     batch_size = config["model"].get("batch_size", 8)
@@ -110,7 +110,6 @@ def _llm_event(
         analyses = backend.generate_json(
             role="7B-A",
             prompt_name="7b_a_device_analysis",
-            prompt_version="public-bian-device-analysis-v1",
             payload={"batch_index": batch_index // batch_size + 1, "candidates": batch},
             validator=lambda value, expected=batch_nodes: _device_analysis_validator(value, expected),
             max_new_tokens=config["model"]["device_max_new_tokens"],
@@ -123,7 +122,6 @@ def _llm_event(
         stage1_raw = backend.generate_json(
             role="7B-B",
             prompt_name="7b_b_stage1",
-            prompt_version="public-bian-stage1-v1",
             payload={
                 "batch_index": batch_index // batch_size + 1,
                 "candidate_evidence": [item for item in compact_candidates if item["node_id"] in batch_nodes],
@@ -149,7 +147,6 @@ def _llm_event(
         stage2_raw = backend.generate_json(
             role="7B-B",
             prompt_name="7b_b_stage2",
-            prompt_version=f"public-bian-stage2-round-{round_index}-v1",
             payload={
                 "round": round_index,
                 "candidates": shortlist,
@@ -160,9 +157,9 @@ def _llm_event(
             max_new_tokens=config["model"]["stage2_max_new_tokens"],
         )
         rounds.append(stage2_raw["candidates"])
-    top5, rank_data = stage2_consensus(rounds, shortlist, config["stage2"]["weights"])
+    top5, _ = stage2_consensus(rounds, shortlist, config["stage2"]["weights"])
 
-    category, class_data = classify_with_llm(
+    category, _ = classify_with_llm(
         backend,
         top5=top5,
         context=context,
@@ -170,14 +167,7 @@ def _llm_event(
         rounds=config["classification"]["rounds"],
         max_new_tokens=config["model"]["classification_max_new_tokens"],
     )
-    return top5, category, {
-        "mode": "bian_llm",
-        "stage1_candidate_count": len(nodes),
-        "stage1_shortlist": shortlist_nodes,
-        "stage2_rounds": len(rounds),
-        "rank_of_ranks": rank_data,
-        "classification": class_data,
-    }
+    return top5, category
 
 
 def run(data_root: Path, output: Path, model: str, use_llm: bool, prediction_prefix: str, max_events: int | None = None) -> int:
@@ -193,25 +183,21 @@ def run(data_root: Path, output: Path, model: str, use_llm: bool, prediction_pre
             HERE / "prompts",
         )
     records = []
-    diagnostics = []
     for index, event in enumerate(events, 1):
         context = build_event_context(event, config)
-        mode = "smoke_fallback"
-        metadata: dict[str, Any] = {"detected_event": "five_sigma"}
         if backend is not None:
             try:
-                top5, category, metadata = _llm_event(event, context, config, backend)
+                top5, category = _llm_event(event, context, config, backend)
             except Exception as exc:
-                # A failed optional model call must not turn a valid AD event
-                # into an invalid JSONL line.  The fallback never classifies.
-                top5 = fallback_top5(context["candidates"])
-                category = unknown_category()
-                metadata = {"mode": "smoke_fallback_after_llm_error", "error": f"{type(exc).__name__}: {exc}"}
+                reason = " ".join(str(exc).splitlines())[:500]
+                raise RuntimeError(
+                    f"BiAn LLM inference failed for event {index}: "
+                    f"{type(exc).__name__}: {reason}"
+                ) from None
         else:
-            shortlist = _smoke_stage1(context)
-            top5 = fallback_top5(shortlist)
+            shortlist = _quick_validation_stage1(context)
+            top5 = quick_validation_top5(shortlist)
             category = unknown_category()
-            metadata = {"mode": mode, "note": "No LLM was requested; taxonomy classification is intentionally unknown."}
         start = event["start"].astimezone(timezone.utc)
         end = event["end"].astimezone(timezone.utc)
         records.append({
@@ -221,24 +207,11 @@ def run(data_root: Path, output: Path, model: str, use_llm: bool, prediction_pre
             "root_cause_top5": top5,
             "fault_category": category,
         })
-        diagnostics.append({"prediction_id": records[-1]["prediction_id"], **metadata})
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    manifest = output.with_name(output.stem + ".manifest.json")
-    effective_mode = "bian_llm" if use_llm and all(item.get("mode") == "bian_llm" for item in diagnostics) else ("smoke_fallback_after_llm_error" if use_llm else "smoke_fallback")
-    manifest.write_text(json.dumps({
-        "events": len(records),
-        "mode": effective_mode,
-        "model_requested": use_llm,
-        "model": model if use_llm else None,
-        "logical_roles": ["7B-A", "7B-B"] if use_llm else [],
-        "prompt_files": [path.name for path in sorted((HERE / "prompts").glob("*.txt"))] if use_llm else [],
-        "diagnostics": diagnostics,
-        "model_calls": backend.call_manifest() if backend is not None else [],
-    }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps({"events": len(records), "output": str(output), "mode": "bian_llm" if use_llm else "smoke_fallback"}, ensure_ascii=False))
+    print(json.dumps({"events": len(records), "output": str(output), "mode": "bian_llm" if use_llm else "quick_validation"}, ensure_ascii=False))
     return 0
 
 
@@ -251,7 +224,11 @@ def main() -> int:
     parser.add_argument("--prediction-prefix", default="pred_")
     parser.add_argument("--max-events", type=int)
     args = parser.parse_args()
-    return run(args.data_root, args.output, args.model, args.use_llm, args.prediction_prefix, args.max_events)
+    try:
+        return run(args.data_root, args.output, args.model, args.use_llm, args.prediction_prefix, args.max_events)
+    except Exception as exc:
+        print(f"Baseline failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

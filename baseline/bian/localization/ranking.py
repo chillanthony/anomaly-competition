@@ -124,6 +124,6 @@ def stage2_consensus(rounds: list[list[dict[str, Any]]], shortlist: list[dict[st
     return top5, rank_data
 
 
-def fallback_top5(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def quick_validation_top5(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ordered = sorted(candidates, key=lambda item: (-item.get("deterministic_score", item.get("stage1_score", 0.0)), -item.get("max_magnitude", 0.0), item["node_id"]))
     return [{"rank": index, "network_element_id": item["node_id"]} for index, item in enumerate(ordered[:5], 1)]

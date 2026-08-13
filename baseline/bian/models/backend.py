@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from pathlib import Path
-import time
 from typing import Any, Callable
 
 from .structured_output import parse_and_validate
@@ -47,7 +46,6 @@ class JsonModelBackend:
         self.prompt_dir = prompt_dir
         self._tokenizer = None
         self._network = None
-        self.calls: list[dict[str, Any]] = []
 
     def load(self) -> None:
         if self._network is not None:
@@ -66,8 +64,15 @@ class JsonModelBackend:
         template = (self.prompt_dir / f"{name}.txt").read_text(encoding="utf-8")
         return template + "\n\nINPUT_JSON:\n" + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
-    def generate_json(self, *, role: str, prompt_name: str, prompt_version: str, payload: dict[str, Any], validator: Callable[[Any], dict[str, Any]], max_new_tokens: int) -> dict[str, Any]:
-        self.load()
+    def generate_json(self, *, role: str, prompt_name: str, payload: dict[str, Any], validator: Callable[[Any], dict[str, Any]], max_new_tokens: int) -> dict[str, Any]:
+        try:
+            self.load()
+        except Exception as exc:
+            reason = " ".join(str(exc).splitlines()).replace(self.model, "<model>")[:500]
+            raise RuntimeError(
+                f"{role}/{prompt_name} model loading failed: "
+                f"{type(exc).__name__}: {reason}"
+            ) from None
         import torch
         assert self._tokenizer is not None and self._network is not None
         error = None
@@ -80,27 +85,16 @@ class JsonModelBackend:
             inputs = self._tokenizer(rendered, return_tensors="pt", truncation=True, max_length=self.config.max_input_tokens)
             device = next(self._network.parameters()).device
             inputs = {key: value.to(device) for key, value in inputs.items()}
-            started = time.perf_counter()
             with torch.inference_mode():
                 output = self._network.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False, pad_token_id=self._tokenizer.eos_token_id, use_cache=True)
             generated = output[0, inputs["input_ids"].shape[-1]:]
             raw = response_prefix + self._tokenizer.decode(generated, skip_special_tokens=True)
-            record = {"role": role, "prompt_name": prompt_name, "prompt_version": prompt_version, "attempt": attempt, "elapsed_seconds": time.perf_counter() - started, "input_tokens": int(inputs["input_ids"].shape[-1]), "output_tokens": int(generated.numel()), "response_prefix": response_prefix, "raw_output": raw}
             try:
-                result = parse_and_validate(
+                return parse_and_validate(
                     raw,
                     expected_key=EXPECTED_KEYS.get(prompt_name),
                     validator=validator,
                 )
-                record["status"] = "success"
-                self.calls.append(record)
-                return result
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
-                record["status"] = "failed"
-                record["error"] = error
-                self.calls.append(record)
         raise ValueError(f"{role}/{prompt_name} failed after retries: {error}")
-
-    def call_manifest(self) -> list[dict[str, Any]]:
-        return self.calls

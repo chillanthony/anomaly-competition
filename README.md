@@ -1,22 +1,22 @@
 # AIOps Challenge 2026
 
-本仓库提供 AIOps Challenge 2026 的公开任务定义、样例数据、评测工具和参考 Baseline。
+本仓库提供 AIOps Challenge 2026 的样例数据、评测工具和参考 Baseline。
 
 ## 安装
 
 ```bash
-python -m pip install -e .
+python -m pip install .
 ```
 
 运行 7B 模型时另安装：
 
 ```bash
-python -m pip install -e ".[llm]"
+python -m pip install ".[llm]"
 ```
 
 ## 样例数据
 
-`sample/` 包含 3 个可直接运行的样例 case，每个 case 覆盖 8 个城市区域及公开 processed 数据源。任务 taxonomy 和网元定义位于 `aiops_challenge_2026/config/`。
+`sample/` 提供 3 个可直接运行的样例 case，每个 case 包含 8 个城市区域的多源网络观测数据。
 
 ## 示例
 
@@ -33,7 +33,7 @@ python tools/run_sample_baseline.py \
   --output outputs/quick_validation_predictions.jsonl
 ```
 
-该模式用于检查数据读取、结构化输出及本地评分流程是否能够正常运行，不代表 BiAn Baseline 的实际推理效果。
+该模式用于快速检查数据读取、结果生成和本地评测流程。快速验证模式仅用于流程检查，其输出不作为比赛提交结果。
 
 ### BiAn Baseline
 
@@ -57,7 +57,7 @@ python tools/run_sample_baseline.py \
 ```bash
 python -m aiops_challenge_2026.evaluator \
   --ground-truth sample/ground_truth.jsonl \
-  --predictions outputs/predictions.jsonl
+  --predictions outputs/bian_predictions.jsonl
 ```
 
 `examples/predictions.jsonl` 可用于演示评测工具的使用方式，不代表 Baseline 性能。
