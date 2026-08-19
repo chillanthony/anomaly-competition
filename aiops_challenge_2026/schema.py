@@ -107,6 +107,24 @@ def _parse_top5(top5: Any, *, tolerate_invalid: bool = False, allow_duplicate_to
 
 
 def _parse_category(category: Any, *, tolerate_invalid: bool = False) -> tuple[dict[str, str], bool, bool]:
+    if tolerate_invalid:
+        if not isinstance(category, dict):
+            return {"major_category": "", "sub_category": ""}, True, True
+        major = category.get("major_category")
+        sub = category.get("sub_category")
+        normalized_major = major if isinstance(major, str) and major else ""
+        normalized_sub = sub if isinstance(sub, str) and sub else ""
+        invalid_major = normalized_major not in VALID_MAJOR
+        invalid_minor = (
+            invalid_major
+            or not normalized_sub
+            or (normalized_major, normalized_sub) not in VALID_MAJOR_SUB_PAIRS
+        )
+        return {
+            "major_category": normalized_major,
+            "sub_category": normalized_sub,
+        }, invalid_major, invalid_minor
+
     try:
         category = _object(
             category,
@@ -119,13 +137,11 @@ def _parse_category(category: Any, *, tolerate_invalid: bool = False) -> tuple[d
         if not isinstance(major, str) or not major or not isinstance(sub, str) or not sub:
             raise SchemaError("fault categories must be non-empty strings")
     except SchemaError:
-        if not tolerate_invalid:
-            raise
-        return {"major_category": "", "sub_category": ""}, True, True
+        raise
 
     invalid_major = major not in VALID_MAJOR
     invalid_minor = (major, sub) not in VALID_MAJOR_SUB_PAIRS
-    if (invalid_major or invalid_minor) and not tolerate_invalid:
+    if invalid_major or invalid_minor:
         if invalid_major:
             raise SchemaError(f"unknown major_category: {major!r}")
         raise SchemaError(f"invalid fault category pair: {(major, sub)!r}")
@@ -175,21 +191,27 @@ def validate_prediction(
 
 
 def normalize_prediction_for_evaluation(record: Any, line_number: int) -> dict[str, Any]:
-    """Validate prediction core fields and isolate RCA/category modules."""
+    """Retain predictions while isolating invalid time, RCA, and category modules."""
     if not isinstance(record, dict):
         raise SchemaError(f"prediction line {line_number} must be an object")
     public = {key: value for key, value in record.items() if not key.startswith("_")}
     item = _object(
         public,
         "prediction",
-        ("prediction_id", "start_time", "end_time"),
+        ("prediction_id",),
         ("prediction_id", "start_time", "end_time", "root_cause_top5", "fault_category"),
     )
     if not isinstance(item["prediction_id"], str) or not item["prediction_id"]:
         raise SchemaError("prediction_id must be a non-empty string")
-    start, end = parse_utc(item["start_time"], "start_time"), parse_utc(item["end_time"], "end_time")
-    if end <= start:
-        raise SchemaError("end_time must be after start_time")
+    try:
+        start = parse_utc(item.get("start_time"), "start_time")
+        end = parse_utc(item.get("end_time"), "end_time")
+        if end <= start:
+            raise SchemaError("end_time must be after start_time")
+        invalid_core = False
+    except SchemaError:
+        start, end = None, None
+        invalid_core = True
     top5, invalid_rca = _parse_top5(item.get("root_cause_top5"), tolerate_invalid=True)
     category, invalid_major, invalid_minor = _parse_category(
         item.get("fault_category"), tolerate_invalid=True
@@ -200,6 +222,7 @@ def normalize_prediction_for_evaluation(record: Any, line_number: int) -> dict[s
         "fault_category": category,
         "_start": start,
         "_end": end,
+        "_invalid_core": invalid_core,
         "_evaluation_tolerant": True,
     }
     if invalid_rca:
@@ -254,6 +277,8 @@ def validate_ground_truth(record: Any) -> dict[str, Any]:
     root = _object(item["root_cause"], "root_cause", ("network_element_id",), ("network_element_id",))
     if not isinstance(root["network_element_id"], str) or not root["network_element_id"]:
         raise SchemaError("root_cause.network_element_id must be a non-empty string")
+    if root["network_element_id"] not in VALID_NETWORK_ELEMENTS:
+        raise SchemaError(f"unknown ground-truth network_element_id: {root['network_element_id']!r}")
     _parse_category(item["fault_category"])
     return {**item, "_start": start, "_end": end}
 

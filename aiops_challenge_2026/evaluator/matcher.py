@@ -79,8 +79,7 @@ def maximum_weight_matches(truths: Sequence[dict], predictions: Sequence[dict], 
         else dice(t["_start"], t["_end"], p["_start"], p["_end"])
         for p in predictions
     ] for t in truths]
-    size = max(len(truths), len(predictions))
-    matrix = [[0.0 for _ in range(size)] for _ in range(size)]
+    matrix = [[0.0 for _ in predictions] for _ in truths]
     for i, row in enumerate(weights):
         for j, value in enumerate(row):
             if value >= threshold:
