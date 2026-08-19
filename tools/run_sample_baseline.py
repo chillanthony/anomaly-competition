@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[1]
 CASES = ("case_001", "case_002", "case_003")
 
 
-def _read_jsonl(path: Path) -> list[dict]:
+def _read_jsonl(path: Path, *, allow_unknown_category: bool = False) -> list[dict]:
     sys.path.insert(0, str(REPO))
     from aiops_challenge_2026.config import load_public_config
     from aiops_challenge_2026.schema import validate_prediction
@@ -35,7 +35,16 @@ def _read_jsonl(path: Path) -> list[dict]:
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        record = validate_prediction(json.loads(line))
+        raw = json.loads(line)
+        category = raw.get("fault_category") if isinstance(raw, dict) else None
+        is_quick_unknown = allow_unknown_category and category == {
+            "major_category": "unknown",
+            "sub_category": "unknown",
+        }
+        record = validate_prediction(
+            raw,
+            allow_invalid_category=is_quick_unknown,
+        )
         if any(
             cause["network_element_id"] not in valid_ids
             for cause in record["root_cause_top5"]
@@ -43,7 +52,7 @@ def _read_jsonl(path: Path) -> list[dict]:
             raise ValueError("prediction contains an unknown network_element_id")
         category = record["fault_category"]
         pair = (category["major_category"], category["sub_category"])
-        if pair not in valid_categories and pair != ("unknown", "unknown"):
+        if pair not in valid_categories and not is_quick_unknown:
             raise ValueError("prediction contains a category outside the public taxonomy")
         records.append(
             {key: value for key, value in record.items() if not key.startswith("_")}
@@ -88,7 +97,10 @@ def main() -> int:
                     f"{case_name}: Baseline inference failed with exit code "
                     f"{exc.returncode}"
                 ) from None
-            records = _read_jsonl(case_output)
+            records = _read_jsonl(
+                case_output,
+                allow_unknown_category=not args.use_llm,
+            )
             if len(records) != 1:
                 raise RuntimeError(
                     f"{case_name}: expected one prediction, got {len(records)}"
@@ -98,7 +110,10 @@ def main() -> int:
         combined = b"".join(path.read_bytes() for path in case_paths)
         staged_output = run_dir / "combined.jsonl"
         staged_output.write_bytes(combined)
-        records = _read_jsonl(staged_output)
+        records = _read_jsonl(
+            staged_output,
+            allow_unknown_category=not args.use_llm,
+        )
         if len(records) != 3 or len({item["prediction_id"] for item in records}) != 3:
             raise RuntimeError("combined prediction must contain three unique events")
         output_staging = args.output.with_name(f".{args.output.name}.tmp")
