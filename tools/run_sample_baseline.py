@@ -28,8 +28,8 @@ def _read_jsonl(path: Path) -> list[dict]:
         for role in network["device_roles"]
     }
     valid_categories = {
-        (sub_category.split("_", 1)[0], sub_category)
-        for sub_category in taxonomy["sub_categories"]
+        (category["major_category"], category["sub_category"])
+        for category in taxonomy["fault_categories"]
     }
     records = []
     for line in path.read_text(encoding="utf-8").splitlines():

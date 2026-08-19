@@ -6,11 +6,13 @@ from typing import Any
 
 
 def classification_taxonomy(config: dict[str, Any]) -> list[dict[str, str]]:
-    result = []
-    for sub_category in config["sub_categories"]:
-        major_category = sub_category.split("_", 1)[0]
-        result.append({"major_category": major_category, "sub_category": sub_category})
-    return result
+    return [
+        {
+            "major_category": category["major_category"],
+            "sub_category": category["sub_category"],
+        }
+        for category in config["fault_categories"]
+    ]
 
 
 def unknown_category() -> dict[str, str]:
