@@ -7,9 +7,29 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .config import load_public_config
+
 
 class SchemaError(ValueError):
-    """Raised when a public record does not conform to the schema."""
+    """Raised when an input record does not conform to the public schema."""
+
+
+_FAULT_TAXONOMY = load_public_config("fault_taxonomy")
+_NETWORK_ELEMENTS = load_public_config("network_elements")
+VALID_MAJOR = frozenset(_FAULT_TAXONOMY["major_categories"])
+VALID_MAJOR_SUB_PAIRS = frozenset(
+    (item["major_category"], item["sub_category"])
+    for item in _FAULT_TAXONOMY["fault_categories"]
+)
+VALID_NETWORK_ELEMENTS = frozenset(
+    f"{city}-{role}"
+    for city in _NETWORK_ELEMENTS["cities"]
+    for role in _NETWORK_ELEMENTS["device_roles"]
+)
+if len(_FAULT_TAXONOMY["fault_categories"]) != 28:
+    raise RuntimeError("fault_taxonomy.json must contain the official 28 fault categories")
+if VALID_MAJOR != {"link", "firewall", "resource", "routing", "service"}:
+    raise RuntimeError("fault_taxonomy.json has unexpected major categories")
 
 
 def parse_utc(value: Any, field: str = "timestamp") -> datetime:
@@ -24,8 +44,7 @@ def parse_utc(value: Any, field: str = "timestamp") -> datetime:
         raise SchemaError(f"{field} is not a valid ISO 8601 timestamp: {value!r}") from exc
     if parsed.tzinfo is None:
         raise SchemaError(f"{field} must include a UTC offset")
-    utc = parsed.astimezone(timezone.utc)
-    return utc
+    return parsed.astimezone(timezone.utc)
 
 
 def _object(record: Any, name: str, required: Iterable[str], allowed: Iterable[str]) -> dict[str, Any]:
@@ -41,120 +60,159 @@ def _object(record: Any, name: str, required: Iterable[str], allowed: Iterable[s
     return record
 
 
-def validate_prediction(record: Any, *, allow_duplicate_top5: bool = False) -> dict[str, Any]:
-    item = _object(record, "prediction", ("prediction_id", "start_time", "end_time", "root_cause_top5", "fault_category"),
-                   ("prediction_id", "start_time", "end_time", "root_cause_top5", "fault_category"))
+def _parse_top5(top5: Any, *, tolerate_invalid: bool = False, allow_duplicate_top5: bool = False) -> tuple[list[dict[str, Any]], bool]:
+    if not isinstance(top5, list) or len(top5) > 5:
+        if tolerate_invalid:
+            return [], True
+        raise SchemaError("root_cause_top5 must contain between zero and five entries")
+    if not top5:
+        return [], False
+
+    normalized: list[dict[str, Any]] = []
+    seen_nodes: set[str] = set()
+    invalid = False
+    for expected_rank, cause in enumerate(top5, 1):
+        try:
+            cause = _object(
+                cause,
+                "root_cause_top5 entry",
+                ("rank", "network_element_id"),
+                ("rank", "network_element_id"),
+            )
+        except SchemaError:
+            if tolerate_invalid:
+                return [], True
+            raise
+        rank = cause["rank"]
+        node = cause["network_element_id"]
+        if type(rank) is not int or rank != expected_rank:
+            if tolerate_invalid:
+                return [], True
+            raise SchemaError("root_cause_top5 ranks must be exactly 1 through len(top5)")
+        if not isinstance(node, str) or not node:
+            if tolerate_invalid:
+                return [], True
+            raise SchemaError("network_element_id must be a non-empty string")
+        if node in seen_nodes:
+            if not tolerate_invalid and not allow_duplicate_top5:
+                raise SchemaError("root_cause_top5 cannot contain duplicate network_element_id")
+            invalid = True
+        if node not in VALID_NETWORK_ELEMENTS:
+            if not tolerate_invalid:
+                raise SchemaError(f"unknown network_element_id: {node!r}")
+            invalid = True
+        seen_nodes.add(node)
+        normalized.append({"rank": rank, "network_element_id": node})
+    return normalized, invalid
+
+
+def _parse_category(category: Any, *, tolerate_invalid: bool = False) -> tuple[dict[str, str], bool, bool]:
+    try:
+        category = _object(
+            category,
+            "fault_category",
+            ("major_category", "sub_category"),
+            ("major_category", "sub_category"),
+        )
+        major = category["major_category"]
+        sub = category["sub_category"]
+        if not isinstance(major, str) or not major or not isinstance(sub, str) or not sub:
+            raise SchemaError("fault categories must be non-empty strings")
+    except SchemaError:
+        if not tolerate_invalid:
+            raise
+        return {"major_category": "", "sub_category": ""}, True, True
+
+    invalid_major = major not in VALID_MAJOR
+    invalid_minor = (major, sub) not in VALID_MAJOR_SUB_PAIRS
+    if (invalid_major or invalid_minor) and not tolerate_invalid:
+        if invalid_major:
+            raise SchemaError(f"unknown major_category: {major!r}")
+        raise SchemaError(f"invalid fault category pair: {(major, sub)!r}")
+    return {"major_category": major, "sub_category": sub}, invalid_major, invalid_minor
+
+
+def validate_prediction(
+    record: Any,
+    *,
+    allow_duplicate_top5: bool = False,
+    allow_invalid_rca: bool = False,
+    allow_invalid_category: bool = False,
+) -> dict[str, Any]:
+    item = _object(
+        record,
+        "prediction",
+        ("prediction_id", "start_time", "end_time", "root_cause_top5", "fault_category"),
+        ("prediction_id", "start_time", "end_time", "root_cause_top5", "fault_category"),
+    )
     if not isinstance(item["prediction_id"], str) or not item["prediction_id"]:
         raise SchemaError("prediction_id must be a non-empty string")
     start, end = parse_utc(item["start_time"], "start_time"), parse_utc(item["end_time"], "end_time")
     if end <= start:
         raise SchemaError("end_time must be after start_time")
-    top5 = item["root_cause_top5"]
-    if not isinstance(top5, list) or len(top5) != 5:
-        raise SchemaError("root_cause_top5 must contain exactly five entries")
-    seen: set[str] = set()
-    for expected_rank, cause in enumerate(top5, 1):
-        cause = _object(cause, "root_cause_top5 entry", ("rank", "network_element_id"), ("rank", "network_element_id"))
-        if type(cause["rank"]) is not int or cause["rank"] != expected_rank:
-            raise SchemaError("root_cause_top5 ranks must be exactly 1 through 5")
-        node = cause["network_element_id"]
-        if not isinstance(node, str) or not node:
-            raise SchemaError("network_element_id must be a non-empty string")
-        if node in seen and not allow_duplicate_top5:
-            raise SchemaError("root_cause_top5 cannot contain duplicate network_element_id")
-        seen.add(node)
-    category = _object(item["fault_category"], "fault_category", ("major_category", "sub_category"), ("major_category", "sub_category"))
-    if not all(isinstance(category[key], str) and category[key] for key in category):
-        raise SchemaError("fault categories must be non-empty strings")
-    result = {**item, "_start": start, "_end": end}
-    if allow_duplicate_top5 and len(seen) != len(top5):
-        result["_top5_duplicate"] = True
+    top5, invalid_rca = _parse_top5(
+        item["root_cause_top5"],
+        tolerate_invalid=allow_invalid_rca,
+        allow_duplicate_top5=allow_duplicate_top5,
+    )
+    category, invalid_major, invalid_minor = _parse_category(
+        item["fault_category"], tolerate_invalid=allow_invalid_category
+    )
+    result = {
+        **item,
+        "root_cause_top5": top5,
+        "fault_category": category,
+        "_start": start,
+        "_end": end,
+    }
+    if invalid_rca:
+        result["_invalid_rca"] = True
+    if invalid_major:
+        result["_invalid_major_category"] = True
+    if invalid_minor:
+        result["_invalid_minor_category"] = True
     return result
 
 
-def _prediction_id(value: Any, line_number: int) -> str:
-    if isinstance(value, str) and value.strip():
-        return value
-    return f"__invalid_prediction_line_{line_number:06d}"
-
-
 def normalize_prediction_for_evaluation(record: Any, line_number: int) -> dict[str, Any]:
-    """Keep an event scorable when only its RCA/category module is malformed.
-
-    The official file format remains strict through :func:`validate_prediction`.
-    The CLI uses this defensive loader because AD is an independent module: a
-    duplicate/invalid Top-5 or taxonomy object must not erase a valid interval.
-    A record without a usable interval is retained as an unmatched FP so that a
-    bad prediction cannot improve the score by disappearing silently.
-    """
+    """Validate prediction core fields and isolate RCA/category modules."""
     if not isinstance(record, dict):
-        return {
-            "prediction_id": _prediction_id(None, line_number),
-            "start_time": None,
-            "end_time": None,
-            "root_cause_top5": [],
-            "fault_category": {"major_category": "", "sub_category": ""},
-            "_invalid_core": True,
-            "_invalid_rca": True,
-            "_invalid_category": True,
-            "_evaluation_tolerant": True,
-        }
-
-    item = dict(record)
-    item["prediction_id"] = _prediction_id(item.get("prediction_id"), line_number)
-    try:
-        start = parse_utc(item.get("start_time"), "start_time")
-        end = parse_utc(item.get("end_time"), "end_time")
-        if end <= start:
-            raise SchemaError("end_time must be after start_time")
-        item["_start"], item["_end"] = start, end
-        item["_invalid_core"] = False
-    except SchemaError:
-        item["_start"], item["_end"] = None, None
-        item["_invalid_core"] = True
-
-    top5 = item.get("root_cause_top5")
-    try:
-        checked = validate_prediction(
-            {
-                "prediction_id": item["prediction_id"],
-                "start_time": "2000-01-01T00:00:00Z",
-                "end_time": "2000-01-01T00:01:00Z",
-                "root_cause_top5": top5,
-                "fault_category": {"major_category": "_", "sub_category": "_"},
-            },
-            allow_duplicate_top5=True,
-        )
-        item["root_cause_top5"] = checked["root_cause_top5"]
-        item["_invalid_rca"] = len(
-            {entry["network_element_id"] for entry in top5}
-        ) != 5
-    except (SchemaError, TypeError, AttributeError):
-        item["root_cause_top5"] = []
-        item["_invalid_rca"] = True
-
-    category = item.get("fault_category")
-    if (
-        isinstance(category, dict)
-        and isinstance(category.get("major_category"), str)
-        and category["major_category"]
-        and isinstance(category.get("sub_category"), str)
-        and category["sub_category"]
-    ):
-        item["fault_category"] = {
-            "major_category": category["major_category"],
-            "sub_category": category["sub_category"],
-        }
-        item["_invalid_category"] = False
-    else:
-        item["fault_category"] = {"major_category": "", "sub_category": ""}
-        item["_invalid_category"] = True
-    item["_evaluation_tolerant"] = True
-    return item
+        raise SchemaError(f"prediction line {line_number} must be an object")
+    public = {key: value for key, value in record.items() if not key.startswith("_")}
+    item = _object(
+        public,
+        "prediction",
+        ("prediction_id", "start_time", "end_time"),
+        ("prediction_id", "start_time", "end_time", "root_cause_top5", "fault_category"),
+    )
+    if not isinstance(item["prediction_id"], str) or not item["prediction_id"]:
+        raise SchemaError("prediction_id must be a non-empty string")
+    start, end = parse_utc(item["start_time"], "start_time"), parse_utc(item["end_time"], "end_time")
+    if end <= start:
+        raise SchemaError("end_time must be after start_time")
+    top5, invalid_rca = _parse_top5(item.get("root_cause_top5"), tolerate_invalid=True)
+    category, invalid_major, invalid_minor = _parse_category(
+        item.get("fault_category"), tolerate_invalid=True
+    )
+    normalized = {
+        **item,
+        "root_cause_top5": top5,
+        "fault_category": category,
+        "_start": start,
+        "_end": end,
+        "_evaluation_tolerant": True,
+    }
+    if invalid_rca:
+        normalized["_invalid_rca"] = True
+    if invalid_major:
+        normalized["_invalid_major_category"] = True
+    if invalid_minor:
+        normalized["_invalid_minor_category"] = True
+    return normalized
 
 
 def load_predictions_for_evaluation(path: Path) -> list[dict[str, Any]]:
-    """Load prediction JSONL with module-level fault isolation for the CLI."""
+    """Load predictions while isolating only RCA and category failures."""
     records: list[dict[str, Any]] = []
     try:
         handle = path.open(encoding="utf-8")
@@ -168,19 +226,26 @@ def load_predictions_for_evaluation(path: Path) -> list[dict[str, Any]]:
                 raw = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise SchemaError(f"{path}:{line_number}: malformed JSONL") from exc
-            records.append(normalize_prediction_for_evaluation(raw, line_number))
+            try:
+                records.append(normalize_prediction_for_evaluation(raw, line_number))
+            except SchemaError as exc:
+                raise SchemaError(f"{path}:{line_number}: {exc}") from exc
     seen: set[str] = set()
     for record in records:
         original = record["prediction_id"]
         if original in seen:
-            record["prediction_id"] = f"{original}__line_{len(seen) + 1:06d}"
-        seen.add(record["prediction_id"])
+            raise SchemaError(f"{path}: duplicate prediction_id: {original!r}")
+        seen.add(original)
     return records
 
 
 def validate_ground_truth(record: Any) -> dict[str, Any]:
-    item = _object(record, "ground truth", ("ground_truth_id", "start_time", "end_time", "root_cause", "fault_category"),
-                   ("ground_truth_id", "start_time", "end_time", "root_cause", "fault_category"))
+    item = _object(
+        record,
+        "ground truth",
+        ("ground_truth_id", "start_time", "end_time", "root_cause", "fault_category"),
+        ("ground_truth_id", "start_time", "end_time", "root_cause", "fault_category"),
+    )
     if not isinstance(item["ground_truth_id"], str) or not item["ground_truth_id"]:
         raise SchemaError("ground_truth_id must be a non-empty string")
     start, end = parse_utc(item["start_time"], "start_time"), parse_utc(item["end_time"], "end_time")
@@ -189,13 +254,11 @@ def validate_ground_truth(record: Any) -> dict[str, Any]:
     root = _object(item["root_cause"], "root_cause", ("network_element_id",), ("network_element_id",))
     if not isinstance(root["network_element_id"], str) or not root["network_element_id"]:
         raise SchemaError("root_cause.network_element_id must be a non-empty string")
-    category = _object(item["fault_category"], "fault_category", ("major_category", "sub_category"), ("major_category", "sub_category"))
-    if not all(isinstance(category[key], str) and category[key] for key in category):
-        raise SchemaError("fault categories must be non-empty strings")
+    _parse_category(item["fault_category"])
     return {**item, "_start": start, "_end": end}
 
 
-def load_jsonl(path: Path, validator) -> list[dict[str, Any]]:
+def load_jsonl(path: Path, validator: Callable[[Any], dict[str, Any]]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     try:
         handle = path.open(encoding="utf-8")

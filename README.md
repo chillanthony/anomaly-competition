@@ -62,6 +62,8 @@ python -m aiops_challenge_2026.evaluator \
 
 `examples/predictions.jsonl` 可用于演示评测工具的使用方式，不代表 Baseline 性能。
 
+时间戳必须包含时区信息，推荐统一使用 UTC。
+
 ## 目录结构
 
 ```text

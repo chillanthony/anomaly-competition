@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..schema import ensure_unique, validate_ground_truth, validate_prediction
+from ..schema import ensure_unique, normalize_prediction_for_evaluation, validate_ground_truth, validate_prediction
 from .matcher import maximum_weight_matches
 from .metrics import ad_single, rca_single
 
@@ -26,7 +26,12 @@ def evaluate(truth_records: list[dict[str, Any]], prediction_records: list[dict[
         return validator(public)
 
     truths = [checked(item, validate_ground_truth) for item in truth_records]
-    predictions = [checked(item, validate_prediction, duplicate_top5_tolerated=True) for item in prediction_records]
+    predictions = [
+        item
+        if isinstance(item, dict) and item.get("_evaluation_tolerant")
+        else normalize_prediction_for_evaluation(item, index + 1)
+        for index, item in enumerate(prediction_records)
+    ]
     ensure_unique(truths, "ground_truth_id")
     ensure_unique(predictions, "prediction_id")
     matches = maximum_weight_matches(truths, predictions)
@@ -49,8 +54,17 @@ def evaluate(truth_records: list[dict[str, Any]], prediction_records: list[dict[
             prediction = predictions[pred_index]
             ad = ad_single(truth, prediction)
             rca = rca_single(truth, prediction)
-            major = float(prediction["fault_category"]["major_category"] == truth["fault_category"]["major_category"])
-            minor = float(major and prediction["fault_category"]["sub_category"] == truth["fault_category"]["sub_category"])
+            major = float(
+                not prediction.get("_invalid_major_category", False)
+                and prediction["fault_category"]["major_category"]
+                == truth["fault_category"]["major_category"]
+            )
+            minor = float(
+                major
+                and not prediction.get("_invalid_minor_category", False)
+                and prediction["fault_category"]["sub_category"]
+                == truth["fault_category"]["sub_category"]
+            )
             ad_sum += ad; rca_sum += rca; major_sum += major; minor_sum += minor
             detail = {"ground_truth_id": truth["ground_truth_id"], "matched": True, "prediction_id": prediction["prediction_id"], "dice": weight, "ad": ad, "rca": rca, "major": major, "minor": minor, "predicted_root_cause_top5": prediction["root_cause_top5"], "predicted_fault_category": prediction["fault_category"]}
         per_gt.append(detail)
