@@ -18,3 +18,12 @@ cache/
 *.pyc
 *.log
 *.egg-info/
+
+# Local datasets and machine-specific files
+/dataset-phase-1/
+.DS_Store
+.env
+.env.*
+!.env.example
+.idea/
+.vscode/
