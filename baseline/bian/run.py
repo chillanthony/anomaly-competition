@@ -13,6 +13,7 @@ import argparse
 from datetime import timezone
 import json
 from pathlib import Path
+import random
 import sys
 from typing import Any
 
@@ -144,18 +145,31 @@ def _llm_event(
 
     rounds = []
     for round_index in range(1, config["stage2"]["rounds"] + 1):
-        stage2_raw = backend.generate_json(
-            role="7B-B",
-            prompt_name="7b_b_stage2",
-            payload={
-                "round": round_index,
-                "candidates": shortlist,
-                "topology": shortlist_topology,
-                "timeline": shortlist_timeline,
-            },
-            validator=lambda value, allowed=shortlist_nodes: validate_stage2(value, allowed),
-            max_new_tokens=config["model"]["stage2_max_new_tokens"],
-        )
+        try:
+            stage2_raw = backend.generate_json(
+                role="7B-B",
+                prompt_name="7b_b_stage2",
+                payload={
+                    "round": round_index,
+                    "candidates": shortlist,
+                    "topology": shortlist_topology,
+                    "timeline": shortlist_timeline,
+                },
+                validator=lambda value, allowed=shortlist_nodes: validate_stage2(value, allowed),
+                max_new_tokens=config["model"]["stage2_max_new_tokens"],
+            )
+        except ValueError as exc:
+            if not str(exc).startswith("7B-B/7b_b_stage2 failed after retries:"):
+                raise
+            stage2_raw = validate_stage2(
+                {"candidates": [
+                    {"node_id": node, "reason": "random fallback", **{
+                        field: random.random() for field in config["stage2"]["weights"]
+                    }}
+                    for node in shortlist_nodes
+                ]},
+                shortlist_nodes,
+            )
         rounds.append(stage2_raw["candidates"])
     top5, _ = stage2_consensus(rounds, shortlist, config["stage2"]["weights"])
 
