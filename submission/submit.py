@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
+import csv
 import json
 import argparse
+from datetime import datetime, timezone
+from pathlib import Path
 from urllib import request, error
 
 
@@ -10,7 +13,26 @@ JUDGE_SERVER = "https://judge.aiops.cn"
 # 比赛 ID，可通过比赛页面 URL 获取
 CONTEST = ""
 # 团队 ID，需要在参加比赛并组队后能获得，具体在比赛详情页-> 团队 -> 团队ID，为一串数字标识。
-TICKET = ""
+TICKET = "2099381749812301890"
+SUBMISSIONS_LOG = Path(__file__).with_name("submissions.csv")
+
+
+def _record_submission(submission_id):
+    """Append a successful submission to the local CSV history."""
+    file_exists = SUBMISSIONS_LOG.exists() and SUBMISSIONS_LOG.stat().st_size > 0
+    try:
+        with SUBMISSIONS_LOG.open("a", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            if not file_exists:
+                writer.writerow(("submitted_at", "submission_id"))
+            writer.writerow(
+                (
+                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    submission_id,
+                )
+            )
+    except OSError as exc:
+        print("Warning: submission succeeded but history was not written: %s" % exc)
 
 
 def submit(data, judge_server=None, contest=None, ticket=None):
@@ -46,6 +68,7 @@ def submit(data, judge_server=None, contest=None, ticket=None):
             remaining_attempts_today = response_body.get(
                 "remaining_attempts_today", -1
             )
+            _record_submission(submission_id)
             return submission_id, remaining_attempts_today
     except error.HTTPError as exc:
         message = exc.reason
