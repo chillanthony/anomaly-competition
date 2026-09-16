@@ -21,6 +21,9 @@ cache/
 
 # Local datasets and machine-specific files
 /dataset-phase-1/
+/sample/
+/samples/
+/note/
 .DS_Store
 .env
 .env.*
