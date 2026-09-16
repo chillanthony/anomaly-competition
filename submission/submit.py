@@ -16,23 +16,80 @@ CONTEST = "2087843807868489822"
 TICKET = "2099381749812301890"
 SUBMISSIONS_LOG = Path(__file__).with_name("submissions.csv")
 
+# Fields filled in by check_status(), in column order after "submission_id".
+STATUS_FIELDS = (
+    "score",
+    "ad_score",
+    "rca_score",
+    "major_score",
+    "minor_score",
+    "judge_time",
+    "error",
+    "checked_at",
+)
+CSV_FIELDS = ("submitted_at", "submission_id") + STATUS_FIELDS
+
+
+def _blank_row():
+    return {field: "" for field in CSV_FIELDS}
+
+
+def _read_history():
+    """Load the local history, padding rows written by older versions."""
+    if not SUBMISSIONS_LOG.exists() or SUBMISSIONS_LOG.stat().st_size == 0:
+        return []
+    with SUBMISSIONS_LOG.open("r", newline="", encoding="utf-8") as file:
+        return [
+            {field: (row.get(field) or "") for field in CSV_FIELDS}
+            for row in csv.DictReader(file)
+        ]
+
+
+def _write_history(rows):
+    tmp_path = SUBMISSIONS_LOG.with_name(SUBMISSIONS_LOG.name + ".tmp")
+    with tmp_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    tmp_path.replace(SUBMISSIONS_LOG)
+
 
 def _record_submission(submission_id):
     """Append a successful submission to the local CSV history."""
-    file_exists = SUBMISSIONS_LOG.exists() and SUBMISSIONS_LOG.stat().st_size > 0
     try:
-        with SUBMISSIONS_LOG.open("a", newline="", encoding="utf-8") as file:
-            writer = csv.writer(file)
-            if not file_exists:
-                writer.writerow(("submitted_at", "submission_id"))
-            writer.writerow(
-                (
-                    datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                    submission_id,
-                )
-            )
+        rows = _read_history()
+        row = _blank_row()
+        row["submitted_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        row["submission_id"] = str(submission_id)
+        rows.append(row)
+        _write_history(rows)
     except OSError as exc:
         print("Warning: submission succeeded but history was not written: %s" % exc)
+
+
+def _record_status(status):
+    """Write status-API fields into the row of the matching submission id."""
+    submission_id = str(status.get("submission_id") or "")
+    if not submission_id:
+        return
+    try:
+        rows = _read_history()
+        for row in rows:
+            if row["submission_id"] == submission_id:
+                break
+        else:
+            row = _blank_row()
+            row["submission_id"] = submission_id
+            rows.append(row)
+        for field in STATUS_FIELDS:
+            if field == "checked_at":
+                continue
+            value = status.get(field)
+            row[field] = "" if value is None else str(value)
+        row["checked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        _write_history(rows)
+    except OSError as exc:
+        print("Warning: status was fetched but history was not updated: %s" % exc)
 
 
 def submit(data, judge_server=None, contest=None, ticket=None):
@@ -112,7 +169,9 @@ def check_status(submission_id, judge_server=None, contest=None, ticket=None):
 
     try:
         with request.urlopen(req) as response:
-            return json.loads(response.read().decode("utf-8"))
+            status = json.loads(response.read().decode("utf-8"))
+        _record_status(status)
+        return status
     except error.HTTPError as exc:
         message = exc.reason
         response_body = exc.read().decode("utf-8")
