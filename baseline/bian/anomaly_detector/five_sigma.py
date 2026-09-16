@@ -39,7 +39,19 @@ def _city(path: Path, aliases: dict[str, str]) -> str | None:
 def _node_id(row: dict[str, str], city: str | None) -> str | None:
     raw = row.get("node") or row.get("node_key") or ""
     raw = raw.strip().strip('"').lower()
-    role = next((token for token in ("br-1", "br-2", "cr-1", "cr-2", "traffic-vm", "service-vm-1", "service-vm-2", "service-vm-3", "fw") if token in raw), None)
+    roles = (
+        "br-1",
+        "br-2",
+        "cr-1",
+        "cr-2",
+        "traffic-vm",
+        "service-vm-1",
+        "service-vm-2",
+        "service-vm-3",
+        "monitor-vm",
+        "fw",
+    )
+    role = next((token for token in roles if token in raw), None)
     if role is None or city is None:
         return None
     return f"{city}-{role}"
@@ -63,7 +75,11 @@ def detect(root: Path, aliases: dict[str, str], sigma: float = 5.0) -> list[dict
         # High-cardinality flow tuples are retained in the sample for users,
         # but are not a stable per-series statistical signal for this compact
         # generic detector.
-        if path.parent.name != "processed" or "frr_syslog" in path.name or "netflow" in path.name:
+        data_directory = path.parent.name
+        if (
+            data_directory != "processed"
+            and not data_directory.endswith("_data")
+        ) or "frr_syslog" in path.name or "netflow" in path.name:
             continue
         city = _city(path, aliases)
         try:

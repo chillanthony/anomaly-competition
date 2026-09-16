@@ -1,4 +1,4 @@
-"""Small helpers for reading public processed observations."""
+"""Small helpers for reading public observations."""
 
 from __future__ import annotations
 
@@ -22,7 +22,10 @@ def parse_observation_time(value: str) -> datetime | None:
 
 def iter_csv_rows(root: Path) -> Iterator[tuple[Path, dict[str, str]]]:
     for path in sorted(root.rglob("*.csv")):
-        if path.parent.name != "processed":
+        if (
+            path.parent.name != "processed"
+            and not path.parent.name.endswith("_data")
+        ):
             continue
         with path.open(newline="", encoding="utf-8-sig", errors="replace") as handle:
             for row in csv.DictReader(handle):

@@ -50,6 +50,19 @@ python tools/run_sample_baseline.py \
 
 模型参数可使用本地权重目录或兼容的模型 ID；参考配置使用 `DeepSeek-R1-Distill-Qwen-7B`。
 
+## 初赛第一阶段数据
+
+解压完整的 `dataset-phase-1/` 数据集后，可直接运行：
+
+```bash
+python tools/run_phase1_baseline.py \
+  --data-root dataset-phase-1 \
+  --output outputs/phase1_predictions.jsonl
+```
+
+正式运行 BiAn 模型时增加 `--use-llm --model <MODEL_PATH_OR_ID>`。可使用
+`--max-events N` 限制进入根因分析的事件数；异常检测仍会扫描完整数据集。
+
 ## 本地评测
 
 仓库提供本地评测工具，可用于验证预测结果：
