@@ -1,1 +1,2 @@
-submitted_at,submission_id
+submitted_at,submission_id,score,ad_score,rca_score,major_score,minor_score,judge_time,error,checked_at
+2026-09-16T08:30:37+00:00,1789547437691,0.0,0.0,0.0,0.0,0.0,2026-09-16 16:30:37,,2026-09-16T09:48:12+00:00

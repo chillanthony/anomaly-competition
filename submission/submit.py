@@ -85,7 +85,9 @@ def _record_status(status):
             if field == "checked_at":
                 continue
             value = status.get(field)
-            row[field] = "" if value is None else str(value)
+            # Keep whatever was recorded earlier when this response omits the field.
+            if value is not None:
+                row[field] = str(value)
         row["checked_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         _write_history(rows)
     except OSError as exc:
