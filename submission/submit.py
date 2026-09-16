@@ -11,7 +11,7 @@ from urllib import request, error
 # 提交答案服务域名或 IP
 JUDGE_SERVER = "https://judge.aiops.cn"
 # 比赛 ID，可通过比赛页面 URL 获取
-CONTEST = ""
+CONTEST = "2087843807868489822"
 # 团队 ID，需要在参加比赛并组队后能获得，具体在比赛详情页-> 团队 -> 团队ID，为一串数字标识。
 TICKET = "2099381749812301890"
 SUBMISSIONS_LOG = Path(__file__).with_name("submissions.csv")

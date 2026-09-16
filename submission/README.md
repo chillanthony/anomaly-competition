@@ -71,11 +71,11 @@ python submit.py [-h] [-s SERVER] [-c CONTEST] [-k TICKET] [-i SUBMISSION_ID] [r
 
 - `[result_path]`：结果文件路径，默认使用当前目录下的 `result.jsonl`。
 - `-s, --server`：评测服务器 URL，未提供时使用脚本中的 `JUDGE_SERVER`。
-- `-c, --contest`：比赛 ID，未提供时使用脚本中的 `CONTEST`。
+- `-c, --contest`：比赛 ID，未提供时使用脚本中的 `CONTEST`（当前默认值为 `2087843807868489822`）。
 - `-k, --ticket`：团队 ID，未提供时使用脚本中的 `TICKET`（当前默认值为 `2099381749812301890`）。
 - `-i, --submission_id`：提交 ID。提供该参数时查询评测状态，不提交答案文件。
 
-比赛 ID 当前没有默认值，提交时必须通过 `--contest` 提供。每次提交成功后，脚本会自动将 UTC 提交时间和 `submission_id` 追加到 `submission/submissions.csv`。
+每次提交成功后，脚本会自动将 UTC 提交时间和 `submission_id` 追加到 `submission/submissions.csv`。
 
 提交示例：
 
