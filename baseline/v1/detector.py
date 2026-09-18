@@ -249,7 +249,7 @@ def _baseline_segment(
 
 
 def _one_sided_floor(
-    reference: list[float],
+    values: list[float],
     params: DetectorParams,
     fleet_unit: float = 0.0,
 ) -> float:
@@ -269,10 +269,16 @@ def _one_sided_floor(
     and lands on the fleet floor; a genuine step has one enormous value for one
     minute; ordinary jitter sets its own scale. Both terms are in the metric's
     own units, so they stay comparable to a residual.
+
+    ``values`` must be the *measured* series, never the trend. The trend is
+    piecewise linear by construction, so its second difference is identically
+    zero at every interior point, the median is zero, and the whole term
+    silently vanishes -- leaving a floor of ``fleet_unit * scale_floor_ratio``
+    or ``TINY`` and scoring every ordinary series against ~1e-12.
     """
     second = [
-        abs(reference[index + 1] - 2.0 * reference[index] + reference[index - 1])
-        for index in range(1, len(reference) - 1)
+        abs(values[index + 1] - 2.0 * values[index] + values[index - 1])
+        for index in range(1, len(values) - 1)
     ]
     local = 1.4826 * median(second) if second else 0.0
     return max(local, fleet_unit * params.scale_floor_ratio, TINY)
@@ -345,7 +351,7 @@ def _self_scores(
         scale = _robust_scale(reference, centre, params.scale_floor_ratio, fleet_unit)
         return {moment: abs(value - centre) / scale for moment, value in points}
 
-    floor = _one_sided_floor(trend, params, fleet_unit)
+    floor = _one_sided_floor(values, params, fleet_unit)
     return {
         moment: abs(value - level) / floor for (moment, value), level in zip(points, trend)
     }
@@ -430,7 +436,7 @@ def _peer_scores(
                     for (moment, _), value in zip(residuals, values)
                 }
             else:
-                floor = _one_sided_floor(trend, params, fleet_unit)
+                floor = _one_sided_floor(values, params, fleet_unit)
                 scored = {
                     moment: abs(value - level) / floor
                     for (moment, _), value, level in zip(residuals, values, trend)
