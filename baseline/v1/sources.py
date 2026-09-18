@@ -257,9 +257,14 @@ def load_series(
     return series, stats
 
 
-# A series with fewer than this many minutes cannot support a baseline plus a
-# detection window; they are noise in a 40 000-point series landscape.
-MIN_POINTS_PER_SERIES = 20
+# A series shorter than this cannot support a baseline plus a detection window:
+# the opening baseline is 5 points and the shortest reportable event is 3, so
+# anything under ~8 is unscoreable no matter what it contains. The bar sits a
+# little above that to keep genuinely sparse series out, but not so high that a
+# short case window is discarded wholesale -- the public sample bundle slices
+# are only ~19-23 minutes long, and a 14-day threshold would silently drop two
+# of its three cases.
+MIN_POINTS_PER_SERIES = 12
 
 
 def _diff_counter(points: list[tuple[datetime, float]]) -> list[tuple[datetime, float]]:

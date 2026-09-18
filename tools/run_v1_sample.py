@@ -18,6 +18,7 @@ import json
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -28,7 +29,22 @@ CASES = ("case_001", "case_002", "case_003")
 SAMPLE_RANGE = "20260728040000_20260729040000"
 
 
-def _window_of(case_root: Path) -> tuple[str, str]:
+def _parse(stamp: str) -> datetime:
+    """Parse either the sample's ``2026-07-28 12:35:00`` or the truth's ISO-Z form.
+
+    Both frames are UTC, so anything tz-aware is converted and then stripped:
+    mixing aware and naive datetimes raises on comparison.
+    """
+    text = stamp.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    moment = datetime.fromisoformat(text)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+    return moment
+
+
+def _window_of(case_root: Path) -> tuple[datetime, datetime]:
     """The time span a sample case covers, read from its node_metrics file."""
     for path in sorted(case_root.rglob("node_metrics_*.csv")):
         first = last = None
@@ -45,13 +61,15 @@ def _window_of(case_root: Path) -> tuple[str, str]:
                     first = parts[index]
                 last = parts[index]
         if first and last:
-            return first.strip(), last.strip()
+            return _parse(first), _parse(last)
     raise SystemExit(f"could not determine window for {case_root}")
 
 
-def _overlaps(truth: dict, window: tuple[str, str]) -> bool:
+def _overlaps(truth: dict, window: tuple[datetime, datetime]) -> bool:
+    """The truth's span is naive UTC in the sample's own frame; compare instants."""
     start, end = window
-    return truth["start_time"] <= end and truth["end_time"] >= start
+    t_start, t_end = _parse(truth["start_time"]), _parse(truth["end_time"])
+    return t_start <= end and t_end >= start
 
 
 def main(argv: list[str] | None = None) -> int:
