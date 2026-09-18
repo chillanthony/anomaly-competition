@@ -289,7 +289,7 @@ def _element_weight(details: dict[str, list[Detection]]) -> dict[str, float]:
     a single overwhelming deviation still outranks a broad mild one.
     """
     return {
-        element: sum(item.score for item in detections) * len({item.key.metric for item in detections}) ** 0.5
+        element: sum(item.score for item in detections) * len({item.key.metric_name for item in detections}) ** 0.5
         for element, detections in details.items()
     }
 
@@ -468,7 +468,7 @@ def classify(incident: dict[str, Any], elements: list[str]) -> dict[str, str]:
     """
     votes: dict[tuple[str, str], float] = {}
     for detection in incident["detections"]:
-        category = _category_for_metric(detection.key.metric)
+        category = _category_for_metric(detection.key.metric_name)
         if category is None:
             continue
         if detection.score > votes.get(category, float("-inf")):

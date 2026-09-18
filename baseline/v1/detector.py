@@ -162,7 +162,7 @@ def _fleet_scales(
     """
     pooled: dict[str, list[float]] = {}
     for key, points in series.items():
-        pooled.setdefault(key.metric, []).extend(value for _, value in points)
+        pooled.setdefault(key.metric_name, []).extend(value for _, value in points)
 
     scales: dict[str, float] = {}
     for metric, values in pooled.items():
@@ -429,7 +429,7 @@ def detect_events(
             continue
         stats["series_scored"] += 1
         points = sorted(points, key=lambda item: item[0])
-        self_score = _self_scores(points, params, fleet_scales.get(key.metric, 0.0))
+        self_score = _self_scores(points, params, fleet_scales.get(key.metric_name, 0.0))
         peer_score = peer.get(key, {})
 
         # A point is flagged when it clears the low bar under whichever of the

@@ -100,6 +100,24 @@ class SeriesKey:
     def element_id(self) -> str:
         return f"{self.region}-{self.role}"
 
+    @property
+    def metric_name(self) -> str:
+        """The actual exported metric name, which is not always ``metric``.
+
+        ``routing_metrics`` has no metric column -- ``metric`` is the literal
+        ``"value"`` and the real name is the first half of ``scope`` (see
+        ``_series_key``). Every test that inspects the *name* of a series has to
+        go through here, or routing series are silently exempt from it. That is
+        what happened to the counter test below: no routing counter was ever
+        differenced, so ``ipv6_route_change_total`` was scored as a level and sat
+        above the detection bar for 76% of minutes.
+        """
+        if self.source == "routing_metrics":
+            name = self.scope.split("|", 1)[0].strip()
+            if name:
+                return name
+        return self.metric
+
 
 def _parse_time(value: str) -> datetime | None:
     text = (value or "").strip().strip('"')
@@ -239,11 +257,14 @@ def load_series(
 
     # A cumulative counter is not comparable to itself across minutes; the
     # meaningful signal is its first difference. Detect by suffix rather than
-    # by a hand-maintained list so new counters are covered automatically.
+    # by a hand-maintained list so new counters are covered automatically. The
+    # name comes from ``key.metric_name``, not ``key.metric``: for routing
+    # metrics the latter is the literal "value" and the test never fires.
     series: dict[SeriesKey, list[tuple[datetime, float]]] = {}
     for key, points in raw.items():
         points.sort(key=lambda item: item[0])
-        if counters_as_rates and (key.metric.endswith("_total") or key.metric.endswith("_count")):
+        name = key.metric_name
+        if counters_as_rates and (name.endswith("_total") or name.endswith("_count")):
             points = _diff_counter(points)
         if len(points) < MIN_POINTS_PER_SERIES:
             continue
