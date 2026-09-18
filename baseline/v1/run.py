@@ -37,8 +37,22 @@ from .vocab import CITIES, DEVICE_ROLES, EXCLUDED_ROLES, is_candidate_role
 # A square root is the right price: it is flat enough that a real 15-minute
 # incident still beats a 5-minute echo, and steep enough that a 24-minute window
 # must cover far more elements than a 12-minute one to score the same.
+#
+# WINDOW_SPAN_POWER is a *sharp* optimum, not a soft knob, and 0.5 sits at its
+# peak. Measured end to end through the evaluator on the labelled sample:
+#
+#     P = 0.5   270.03   1 record per case, AD 28.7-30.9, no false positives
+#     P = 0.7   260.55   +1 FP,  the winner collapses onto a 2-minute stub
+#     P = 0.9   244.56   +3..5 FP, the winner becomes a 1-minute record
+#     P >= 1.1    0.00   15-20 one-minute records per case, every one an FP
+#
+# Raising the power does not merely trim spans: it makes single minutes win, the
+# suppression cut-off then admits the whole fragment ladder, and precision -- and
+# with it the AD multiplier -- goes to zero. Do not tune this without re-running
+# the labelled gate.
 WINDOW_MAX_MINUTES = 24
 WINDOW_SPAN_POWER = 0.5
+# Window placements retained as suppression input, per submitted record allowed.
 # A window is worth reporting only if it scores within this fraction of the best
 # one. Measured on the labelled sample: the winner leads the runner-up by ~7x, so
 # anything from 0.2 to 1.0 selects the same single window -- the exact value is
@@ -109,6 +123,32 @@ def _candidate_windows(
     only a minute that flagged something can begin a best window -- a window
     starting on a silent minute is strictly improved by dropping that minute --
     so the enumeration is linear in evidence rather than in file length.
+
+    A previous revision scored the *excess* over a background estimate::
+
+        score = (element-minutes covered - background * span) / span ** P
+
+    which was meant to make the score comparable across pooled regions and to
+    self-trim the window to the fault. Both goals fail on the data, and the
+    revision scored 176.00 against this one's 270.03 through the evaluator, so it
+    was reverted. Two reasons, both measured:
+
+    * ``background`` is not estimable from the grid. ``_minute_grid`` spans the
+      *detections*, so on a carved sample window the grid is the incident itself:
+      grid lengths there are 18-23 minutes against faults of 8-13 minutes, which
+      puts the per-minute median *inside* the fault. Using the median of a
+      18-minute grid as "what this pool shows when nothing is happening" is not a
+      background, it is the incident's own busy middle. The parameter was
+      degenerate besides: any quantile at or below 0.10 reproduces the raw score
+      exactly, and 0.25 upward collapses to 176.00.
+    * There is nothing to self-trim against. Element density does not decay after
+      a fault ends in these files -- post-fault minutes stay at or above fault
+      level -- so extending a window past the evidence does not lower its excess
+      score, and the trimming property does not hold.
+
+    The Dice-gate worry that motivated the excess score is real but is already
+    handled by ``WINDOW_SPAN_POWER``: see the constants block above for the
+    measured effect of that exponent.
 
     Only the top ``keep`` placements are retained. They are the raw material for
     suppression, which needs a handful of candidates per incident, not a ranking

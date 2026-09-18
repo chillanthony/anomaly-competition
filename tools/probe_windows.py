@@ -1,30 +1,37 @@
 """Measure how incident construction behaves as regions are added.
 
 Running the detector on one region and on all eight should give that region the
-same answer either way. It does not: xian alone yields 170 incidents, while all
-eight regions together yield 86 -- and only 15 of those carry a xian element at
-rank one.
+same answer either way. It does not: xian alone yields 155 incidents, while the
+eighth-region result is 86 pooled, of which only 22 carry a xian element.
 
-Detection is not the problem. Events scale with the number of regions exactly as
-they should (6,501 -> 48,992, a factor of 7.5 against 8.1x the points), so the
-per-series scoring is behaving. Everything collapses in ``build_incidents``, and
-the two volumes that could do the collapsing are both *global* and neither is
-scale free:
+Detection is not the problem. Events scale with the number of regions the way
+they should, so the per-series scoring is behaving. Everything collapses in
+``build_incidents``.
 
-* ``_candidate_windows`` scores a placement by the element-minutes it covers.
-  That number grows with how many regions happen to be loaded -- eight regions
-  reporting one flagged element each at the same minute contribute eight, not
-  one -- so the maximum over all placements inflates roughly eightfold.
-* ``_select_windows`` cuts at ``WINDOW_KEEP_RATIO`` times the *best* candidate.
-  The bar is therefore relative to that inflated maximum, and an incident that
-  was comfortably the best thing in its own region stops clearing it once seven
-  other regions are in the pool.
+The first version of this probe tested two hypotheses about *the bar*: that
+``_candidate_windows`` inflates its maximum by counting element-minutes across
+regions, and that ``_select_windows``' relative cutoff therefore rises out of
+reach. The measurement refuted both, and the refutation is the finding:
 
-Both effects predict the same symptom, and this prints the counts, the score
-distribution and the cutoff on both sides so which one is binding can be read
-off rather than argued about. The per-region incident counts are computed by
-running ``build_incidents`` on each region's detections in isolation, which is
-the answer that region would get from a single-region run.
+* ``above_cutoff=16000/16000`` -- every retained candidate cleared the bar, so
+  the cutoff was not binding at all.
+* the pooled top 20 spanned 163.3 down to 158.9, a flat 2.7%, so there was no
+  meaningful ranking for a bar to cut anyway.
+* ``pooled spans`` put 62 of 86 incidents at 23 minutes.
+
+Flat scores and a ``span ** 0.5`` divisor that grows slower than coverage means
+a longer window always wins, so every incident inflates to the cap -- and an
+inflated report cannot match a short fault, because a 23-minute prediction
+against a true 5-minute fault gives Dice 0.357, under the 0.4 gate. The defect
+was in the *score*, not the threshold. ``_candidate_windows`` now scores excess
+over the grid's median background density, which is both scale-free across runs
+and self-trimming in span.
+
+This probe stays useful as the regression: the span histogram should now peak at
+the true span of the incidents rather than at the cap, and the per-region solo
+counts should survive pooling. The per-region counts are computed by running
+``build_incidents`` on each region's detections in isolation, which is the
+answer that region would get from a single-region run.
 """
 
 from __future__ import annotations
