@@ -95,6 +95,23 @@ class DetectorParams:
     baseline_fraction: float = 0.2
     baseline_points: int = 5
 
+    # The reference a series is judged against adapts, slowly. A trailing
+    # median over this many minutes follows drift and permanent steps -- which
+    # a frozen opening slice cannot -- while staying far longer than the
+    # longest event, so a fault is always a minority of the window and cannot
+    # pull the reference onto itself.
+    trend_window_minutes: int = 180
+    # Reference medians are computed on a grid this coarse and interpolated.
+    # An exact per-minute median would mean sorting 180 values twenty thousand
+    # times per series, across nine hundred series in one region.
+    trend_stride_minutes: int = 15
+    # Below this many points the trailing window is not yet meaningful and the
+    # series is judged against its opening slice instead. The public sample
+    # bundle's ~20-minute case windows must keep the frozen reference: a
+    # trailing window that short adapts onto the fault within a few points of
+    # its onset and the fault disappears.
+    trend_min_series: int = 360
+
     # Ranking score is log1p(z) per point, and a run's score is the L2 norm of
     # its points. The cap is a safety net, not a working limit: reaching it
     # would need a z of e^40.
@@ -231,17 +248,107 @@ def _baseline_segment(
     return values[:count] if count < len(values) else values
 
 
+def _one_sided_floor(
+    reference: list[float],
+    params: DetectorParams,
+    fleet_unit: float = 0.0,
+) -> float:
+    """The noise floor for a *trend-relative* deviation.
+
+    ``_robust_scale`` measures spread about the centre, and that is the right
+    yardstick for a level difference. It is the wrong one for a residual
+    against a trailing median: on a series that is a clean ramp -- a counter the
+    name test did not catch, an uptime clock -- every value sits one
+    half-window from the reference, the residuals are almost all identical in
+    sign and size, and their MAD is a fraction of a percent of the ramp's own
+    minute-to-minute rate. Dividing by that scores the ramp itself as an
+    enormous deviation on every single minute.
+
+    So the floor here is built from second differences instead: the local
+    curvature, ``|v[i+1] - 2v[i] + v[i-1]|``. A straight ramp has none of it
+    and lands on the fleet floor; a genuine step has one enormous value for one
+    minute; ordinary jitter sets its own scale. Both terms are in the metric's
+    own units, so they stay comparable to a residual.
+    """
+    second = [
+        abs(reference[index + 1] - 2.0 * reference[index] + reference[index - 1])
+        for index in range(1, len(reference) - 1)
+    ]
+    local = 1.4826 * median(second) if second else 0.0
+    return max(local, fleet_unit * params.scale_floor_ratio, TINY)
+
+
+def _trend_series(
+    values: list[float],
+    params: DetectorParams,
+) -> list[float] | None:
+    """A slowly-adapting trailing level, one entry per value.
+
+    Each grid point is the median of the ``trend_window_minutes`` preceding it
+    (inclusive), stepping every ``trend_stride_minutes``; the points in between
+    are linearly interpolated. Both choices are what make this usable, not just
+    fast:
+
+    * A *median* does not move onto a fault the way a mean does. Twenty minutes
+      of a thirty-minute window sitting at a new level is exactly the shape of
+      a real incident, and on this corpus the injected faults run to twenty
+      minutes, so a trailing window needs to be comfortably longer than that --
+      the default is nine times ``max_event_minutes``.
+    * *Interpolating between grid points* is what gives a step its sharp edge
+      back. At a stride of fifteen, a step reaches the reference gradually over
+      that many minutes, so the deviation is large, grows, and then decays as
+      the new level is adopted -- an event with a beginning and an end, rather
+      than the flat permanent flag a frozen baseline produces.
+
+    Returns ``None`` for series too short for a trailing reference, where the
+    caller keeps the frozen opening slice.
+    """
+    count = len(values)
+    if count < params.trend_min_series:
+        return None
+
+    window = max(2, min(params.trend_window_minutes, count))
+    stride = max(1, params.trend_stride_minutes)
+    grid = list(range(0, count, stride))
+    if grid[-1] != count - 1:
+        grid.append(count - 1)
+    levels = [
+        median(values[max(0, index - window + 1) : index + 1]) for index in grid
+    ]
+
+    reference: list[float] = []
+    segment = 0
+    for index in range(count):
+        while segment + 2 < len(grid) and grid[segment + 1] < index:
+            segment += 1
+        left, right = grid[segment], grid[segment + 1]
+        span = right - left
+        if span <= 0 or index >= grid[-1]:
+            reference.append(levels[segment])
+            continue
+        weight = (index - left) / span
+        reference.append(levels[segment] * (1.0 - weight) + levels[segment + 1] * weight)
+    return reference
+
+
 def _self_scores(
     points: list[tuple[datetime, float]],
     params: DetectorParams,
     fleet_unit: float = 0.0,
 ) -> dict[datetime, float]:
-    """Raw deviation of each minute from the series' own opening baseline."""
+    """Deviation of each minute from the series' own recent level."""
     values = [value for _, value in points]
-    reference = _baseline_segment(values, params)
-    centre = median(reference)
-    scale = _robust_scale(reference, centre, params.scale_floor_ratio, fleet_unit)
-    return {moment: abs(value - centre) / scale for moment, value in points}
+    trend = _trend_series(values, params)
+    if trend is None:
+        reference = _baseline_segment(values, params)
+        centre = median(reference)
+        scale = _robust_scale(reference, centre, params.scale_floor_ratio, fleet_unit)
+        return {moment: abs(value - centre) / scale for moment, value in points}
+
+    floor = _one_sided_floor(trend, params, fleet_unit)
+    return {
+        moment: abs(value - level) / floor for (moment, value), level in zip(points, trend)
+    }
 
 
 def _peer_scores(
@@ -278,6 +385,10 @@ def _peer_scores(
     for (role, source, metric, scope), per_region in groups.items():
         if len(per_region) < params.min_peers + 1:
             continue
+        # The fleet floor is keyed by exported name; for routing series that is
+        # not the group's ``metric`` (always "value") but the scope's first half.
+        group_key = SeriesKey("", role, source, metric, scope)
+        key_name = group_key.metric_name
         by_time: dict[datetime, dict[str, float]] = {}
         for region, points in per_region.items():
             for moment, value in points:
@@ -296,21 +407,35 @@ def _peer_scores(
             if len(residuals) < params.min_points:
                 continue
             values = [value for _, value in residuals]
-            reference = _baseline_segment(values, params)
-            centre = median(reference)
             # Residuals carry the metric's units, so the fleet floor for that
             # metric applies here too. Without it a near-constant metric gives
             # near-constant residuals whose spread is ~1e-6, and an ordinary
             # 0.1% wobble reads as a hundred-sigma step.
-            scale = _robust_scale(
-                reference,
-                centre,
-                params.scale_floor_ratio,
-                (fleet_scales or {}).get(metric, 0.0),
-            )
-            result[SeriesKey(region, role, source, metric, scope)] = {
-                moment: abs(value - centre) / scale for moment, value in residuals
-            }
+            fleet_unit = (fleet_scales or {}).get(key_name, 0.0)
+            # The same adaptive reference as the self path, and for the same
+            # reason: a region that drifts away from its peers over days, or
+            # steps once and stays there, would otherwise sit above the bar for
+            # the rest of the file. What should score is the *change* in the
+            # region's relationship to its peers -- the fault -- not its
+            # settled aftermath, which no incident interval can overlap.
+            trend = _trend_series(values, params)
+            if trend is None:
+                reference = _baseline_segment(values, params)
+                centre = median(reference)
+                scale = _robust_scale(
+                    reference, centre, params.scale_floor_ratio, fleet_unit
+                )
+                scored = {
+                    moment: abs(value - centre) / scale
+                    for (moment, _), value in zip(residuals, values)
+                }
+            else:
+                floor = _one_sided_floor(trend, params, fleet_unit)
+                scored = {
+                    moment: abs(value - level) / floor
+                    for (moment, _), value, level in zip(residuals, values, trend)
+                }
+            result[SeriesKey(region, role, source, metric, scope)] = scored
     return result
 
 
